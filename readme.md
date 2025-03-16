@@ -27,7 +27,8 @@ https://platform.openai.com/api-keys
 ## RAG - Fusion
 https://github.com/langchain-ai/langchain/blob/master/cookbook/rag_fusion.ipynb?ref=blog.langchain.dev
 
-![img_3.png](img_3.png)
+
+![img_3.png](images/img_3.png)
 
 Retrieval-Augmented Generation (RAG) is a technique that enhances the capabilities of language models by integrating external knowledge sources into the generation process. This approach allows models to access up-to-date information beyond their training data, improving the accuracy and relevance of their responses.
 
@@ -42,7 +43,8 @@ Retrieval-Augmented Generation (RAG) is a technique that enhances the capabiliti
 
 
 # LangSmith
-![img.png](img.png)
+
+![img.png](images/img.png)
 
 Observability
 Analyze traces in LangSmith and configure metrics, dashboards, alerts based on these.
@@ -55,12 +57,13 @@ Iterate on prompts, with automatic version control and collaboration features.
 
 
 ## Indexing
-![img_1.png](img_1.png)
+
+![img_1.png](images/img_1.png)
 
 
 
 
 # End of End Retrival 
 
-![img_2.png](img_2.png)
+![img_2.png](images/img_2.png)
 
