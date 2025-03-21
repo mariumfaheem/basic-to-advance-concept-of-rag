@@ -148,15 +148,17 @@ def generator(questions: str, retriever: BaseRetriever):
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
+
     rag_chain = (
-        RunnableMap({
-            "context": retriever | format_docs,
-            "question": RunnablePassthrough()
-        })
-        | prompt
-        | llm
-        | StrOutputParser()
+            RunnableMap({
+                "context": itemgetter("question") | retriever | format_docs,
+                "question": itemgetter("question")
+            })
+            | prompt
+            | llm
+            | StrOutputParser()
     )
+
 
     result = rag_chain.invoke(questions)
 
@@ -168,7 +170,6 @@ if __name__ == '__main__':
 
     question_input = {"question": "Can you explain me in simple terms what is LLM and can it be autonomous agent?"}
     retriever_instance = create_retriever()
-
-    print(generator(question_input["question"], retriever_instance))
+    print(generator(question_input, retriever_instance))
 
 
