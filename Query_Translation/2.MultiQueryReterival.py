@@ -6,6 +6,8 @@ import bs4
 import argparse
 import os
 import sys
+from langchain.prompts import PromptTemplate
+from langchain.schema.runnable import RunnableMap
 from operator import itemgetter
 
 from dotenv import load_dotenv
@@ -42,9 +44,8 @@ from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
 import logging
 
-
-
-
+logging.basicConfig()
+logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.INFO)
 load_dotenv()
 
 
@@ -96,12 +97,13 @@ def create_retriever(DOCUMENT_URL="https://lilianweng.github.io/posts/2023-06-23
     # retriever
     retriever = vector_store.as_retriever()
 
+    print("stored doucment into Vector DB Done",retriever)
+
     return retriever
 
 
 def query_generator(original_query):
-    logging.basicConfig()
-    logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.INFO)
+
 
     query = original_query.get("query")
     print("Original Query:", query)
@@ -115,17 +117,28 @@ def query_generator(original_query):
 
     output_parser = LineListOutputParser()
 
-    QUERY_PROMPT = """You are an AI language model assistant. Your task is to generate five 
+    QUERY_PROMPT = PromptTemplate.from_template(
+        """You are an AI language model assistant. Your task is to generate five 
     different versions of the given user question to retrieve relevant documents from a vector 
     database. By generating multiple perspectives on the user question, your goal is to help
     the user overcome some of the limitations of the distance-based similarity search. 
-    Provide these alternative questions separated by newlines. Original question: {question}"""
-
+    Provide these alternative questions separated by newlines. Original question: {question}
+        """
+    )
 
     llm = ChatOpenAI(temperature=0)
 
     # Chain
-    llm_chain = QUERY_PROMPT | llm | output_parser
+    #llm_chain = RunnableMap(QUERY_PROMPT | llm | output_parser)
+    llm_chain = (
+            RunnableMap({
+                "question": itemgetter("question")
+            })
+            | QUERY_PROMPT
+            | llm
+            | output_parser
+    )
+
 
     queries = llm_chain.invoke({"question": query})
 
@@ -139,40 +152,36 @@ def query_generator(original_query):
 
 
 
-def retriever(query):
-    """RRF retriever
+def retriever(query: str):
+    # Step 1: Call the vector DB retriever
+    vector_db_retriever = create_retriever()
 
-    Args:
-        query (str): Query string
+    # Step 2: Generate queries once
+    queries = query_generator({"query": query})
 
-    Returns:
-        list[Document]: retrieved documents
-    """
+    # Step 3: Retrieve documents for each query
+    all_docs = []
+    for q in queries:
+        docs = vector_db_retriever.get_relevant_documents(q)
+        all_docs.extend(docs)
 
-    # Retriever
-    retriever = create_retriever() #Vector DB
+    print(f"Retrieved {len(all_docs)} documents in total before deduplication")
 
-    # RRF chain
-    chain = (
-        {"query": itemgetter("query")}
-        | RunnableLambda(query_generator)
-        | retriever.map()
-    )
+    # Step 4: Deduplicate using set of string dumps
+    unique_docs = list({dumps(doc): doc for doc in all_docs}.values())
 
-    # invoke
-    result = chain.invoke({"query": query})
-    print("result of doucment retrieve from vector DB",retriever)
-
-    return result
+    print(f"Returning {len(unique_docs)} unique documents after deduplication")
+    return unique_docs
 
 
-def final_answer_generate(questions, retriever: BaseRetriever):
+
+def final_answer_generate(question: str):
     """
     Retrieves relevant documents using `retriever` and generates an AI response.
     """
-    # Define the prompt object
+    query = question["query"]
+    docs = retriever(query)
 
-    # Prompt
     # RAG
     template = """Answer the following question based on this context:
 
@@ -184,30 +193,26 @@ def final_answer_generate(questions, retriever: BaseRetriever):
     prompt = ChatPromptTemplate.from_template(template)
 
     llm = ChatOpenAI(temperature=0)
+    context_text = "\n\n".join(doc.page_content for doc in docs)
 
-    final_rag_chain = (
-            {"context": retrieval_chain,
-             "question": itemgetter("question")}
+    chain = (
+            RunnableLambda(lambda x: {"context": context_text, "question": query})
             | prompt
             | llm
             | StrOutputParser()
     )
 
-    final_rag_chain.invoke({"question": question})
+
+    result = chain.invoke({})
+
+    return result
 
 
 
 
 if __name__ == '__main__':
-    # Step 1: Define the original question
     original_query = {"query": "What are the main components of an LLM-powered autonomous agent system?"}
-
-    # Step 2: Generate sub-questions
-    questions = query_generator(original_query)  # Generates list of sub-queries
-
-    # Step 3: Create a retriever
-    retriever_instance = create_retriever()  # Initializes a vector database retriever
-
-    # Step 4: Generate final answers using decomposition RAG
-    print(final_answer_generate(questions, retriever_instance))
+    answer = final_answer_generate(original_query)
+    print("\n\n=== FINAL ANSWER ===\n")
+    print(answer)
 
