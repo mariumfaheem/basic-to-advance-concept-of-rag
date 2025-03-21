@@ -7,6 +7,10 @@ import argparse
 import os
 import sys
 from operator import itemgetter
+from langchain.prompts import PromptTemplate
+from langchain.schema.runnable import RunnableMap
+# from langchain.output_parsers import StrOutputParser
+from langchain.chat_models import ChatOpenAI
 
 from dotenv import load_dotenv
 from langchain.load import dumps, loads
@@ -86,7 +90,7 @@ def create_retriever(DOCUMENT_URL="https://lilianweng.github.io/posts/2023-06-23
     vector_store = Milvus(
         embedding_function=embeddings,
         connection_args={"uri": URI,"db_name": "milvus_demo"},
-        collection_name="simple-rag",
+        collection_name="simple_rag",
         index_params={"index_type": "FLAT", "metric_type": "L2"},
     )
 
@@ -125,50 +129,46 @@ def retriever(query):
     return result
 
 
-def generator(questions, retriever: BaseRetriever):
+def generator(questions: str, retriever: BaseRetriever):
     """
     Retrieves relevant documents using `retriever` and generates an AI response.
-    """
-    # Define the prompt object
-
-    # Prompt
-    #prompt = hub.pull("rlm/rag-prompt")
-
-    # Prompt
-    prompt = """Answer the question based only on the following context:
-    {context}
-
-    Question: {question}
+    Expects question_dict like {"question": "Your question here"}
     """
 
-    # LLM
+    prompt = PromptTemplate.from_template(
+        """Answer the question based only on the following context:
+        {context}
+
+        Question: {question}
+        """
+    )
+
     llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0)
 
-    # Post-processing
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
-    # Chain
     rag_chain = (
-            {"context": retriever | format_docs, "question": RunnablePassthrough()}
-            | prompt
-            | llm
-            | StrOutputParser()
+        RunnableMap({
+            "context": retriever | format_docs,
+            "question": RunnablePassthrough()
+        })
+        | prompt
+        | llm
+        | StrOutputParser()
     )
 
-    # Question
-    result = rag_chain.invoke({"question": questions})
+    result = rag_chain.invoke(questions)
 
     return result
 
 
 
 if __name__ == '__main__':
-    questions = {"query": "What are the main components of an LLM-powered autonomous agent system?"}
 
+    question_input = {"question": "Can you explain me in simple terms what is LLM and can it be autonomous agent?"}
     retriever_instance = create_retriever()
 
-    print(generator(questions, retriever_instance))
-
+    print(generator(question_input["question"], retriever_instance))
 
 
