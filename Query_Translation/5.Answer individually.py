@@ -199,57 +199,57 @@ def retriever(query):
     return answers
 
 
-# def final_answer_generate(questions, retriever: BaseRetriever):
-#     """
-#     Retrieves relevant documents using `retriever` and generates an AI response.
-#     """
-#     # Define the prompt object
-#
-#     # Prompt
-#     template = """Here is the question you need to answer:
-#
-#     \n --- \n {question} \n --- \n
-#
-#     Here is any available background question + answer pairs:
-#
-#     \n --- \n {q_a_pairs} \n --- \n
-#
-#     Here is additional context relevant to the question:
-#
-#     \n --- \n {context} \n --- \n
-#
-#     Use the above context and any background question + answer pairs to answer the question: \n {question}
-#     """
-#
-#     decomposition_prompt = PromptTemplate(
-#         template=template,
-#         input_variables=["context", "question"],
-#     )
-#
-#     def format_qa_pair(question, answer):
-#         """Format Q and A pair"""
-#         formatted_string = ""
-#         formatted_string += f"Question: {question}\nAnswer: {answer}\n\n"
-#         return formatted_string.strip()
-#
-#     # Initialize OpenAI model
-#     llm = ChatOpenAI(temperature=0)
-#     q_a_pairs = ""
-#     for q in questions:
-#         rag_chain = (
-#                 {"context": itemgetter("question") | retriever,
-#                  "question": itemgetter("question"),
-#                  "q_a_pairs": itemgetter("q_a_pairs")}
-#                 | decomposition_prompt
-#                 | llm
-#                 | StrOutputParser())
-#
-#         answer = rag_chain.invoke({"question": q, "q_a_pairs": q_a_pairs})
-#         q_a_pair = format_qa_pair(q, answer)
-#         q_a_pairs = q_a_pairs + "\n---\n" + q_a_pair
-#
-#     return answer
-#
+def final_answer_generate(questions, retriever: BaseRetriever):
+    """
+    Retrieves relevant documents using `retriever` and generates an AI response.
+    """
+    # Define the prompt object
+
+    # Prompt
+    template = """Here is the question you need to answer:
+
+    \n --- \n {question} \n --- \n
+
+    Here is any available background question + answer pairs:
+
+    \n --- \n {q_a_pairs} \n --- \n
+
+    Here is additional context relevant to the question:
+
+    \n --- \n {context} \n --- \n
+
+    Use the above context and any background question + answer pairs to answer the question: \n {question}
+    """
+
+    decomposition_prompt = PromptTemplate(
+        template=template,
+        input_variables=["context", "question"],
+    )
+
+    def format_qa_pair(question, answer):
+        """Format Q and A pair"""
+        formatted_string = ""
+        formatted_string += f"Question: {question}\nAnswer: {answer}\n\n"
+        return formatted_string.strip()
+
+    # Initialize OpenAI model
+    llm = ChatOpenAI(temperature=0)
+    q_a_pairs = ""
+    for q in questions:
+        rag_chain = (
+                {"context": itemgetter("question") | retriever,
+                 "question": itemgetter("question"),
+                 "q_a_pairs": itemgetter("q_a_pairs")}
+                | decomposition_prompt
+                | llm
+                | StrOutputParser())
+
+        answer = rag_chain.invoke({"question": q, "q_a_pairs": q_a_pairs})
+        q_a_pair = format_qa_pair(q, answer)
+        q_a_pairs = q_a_pairs + "\n---\n" + q_a_pair
+
+    return answer
+
 
 
 
@@ -258,14 +258,14 @@ if __name__ == '__main__':
     original_query = {"query": "What are the main components of an LLM-powered autonomous agent system?"}
 
     # Step 2: Generate sub-questions
-    #questions = query_generator(original_query)  # Generates list of sub-queries
+    questions = query_generator(original_query)  # Generates list of sub-queries
 
-    print(retriever(original_query))
+    #print(retriever(original_query))
 
 
     # Step 3: Create a retriever
-    #retriever_instance = create_retriever()  # Initializes a vector database retriever
+    retriever_instance = create_retriever()  # Initializes a vector database retriever
 
     # Step 4: Generate final answers using decomposition RAG
-    #print(final_answer_generate(questions, retriever_instance))
+    print(final_answer_generate(questions, retriever_instance))
 
