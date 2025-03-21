@@ -40,6 +40,8 @@ from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_core.output_parsers import BaseOutputParser
 from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
+# Few Shot Examples
+from langchain_core.prompts import ChatPromptTemplate, FewShotChatMessagePromptTemplate
 import logging
 
 
@@ -86,7 +88,7 @@ def create_retriever(DOCUMENT_URL="https://lilianweng.github.io/posts/2023-06-23
     vector_store = Milvus(
         embedding_function=embeddings,
         connection_args={"uri": URI,"db_name": "milvus_demo"},
-        collection_name="simple-rag",
+        collection_name="decomposition",
         index_params={"index_type": "FLAT", "metric_type": "L2"},
     )
 
@@ -97,6 +99,15 @@ def create_retriever(DOCUMENT_URL="https://lilianweng.github.io/posts/2023-06-23
     retriever = vector_store.as_retriever()
 
     return retriever
+
+
+def HyDE(original_query):
+    query = original_query.get("query")
+    print("Original Query:", query)
+    # Few Shot Examples
+
+
+
 
 
 def retriever(query):
@@ -115,6 +126,7 @@ def retriever(query):
     # RRF chain
     chain = (
         {"query": itemgetter("query")}
+        | RunnableLambda(take_step_back)
         | retriever.map()
     )
 
@@ -125,43 +137,57 @@ def retriever(query):
     return result
 
 
-def generator(questions, retriever: BaseRetriever):
+def final_answer_generate(questions, retriever: BaseRetriever):
     """
     Retrieves relevant documents using `retriever` and generates an AI response.
     """
     # Define the prompt object
 
+
     # Prompt
-    prompt = hub.pull("rlm/rag-prompt")
+    template = """You are an expert of world knowledge. I am going to ask you a question. Your response should be comprehensive and not contradicted with the following context if they are relevant. Otherwise, ignore them if they are not relevant.
 
-    # LLM
-    llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0)
+    # {normal_context}
+    # {step_back_context}
 
-    # Post-processing
-    def format_docs(docs):
-        return "\n\n".join(doc.page_content for doc in docs)
+    # Original Question: {question}
+    # Answer:"""
 
-    # Chain
-    rag_chain = (
-            {"context": retriever | format_docs, "question": RunnablePassthrough()}
-            | prompt
+    response_prompt = PromptTemplate(
+        template=template,
+        input_variables=["context", "question"],
+    )
+
+    # Initialize OpenAI model
+    llm = ChatOpenAI(temperature=0)
+
+    chain = (
+            {
+                # Retrieve context using the normal question
+                "normal_context": RunnableLambda(lambda x: x["query"]) | retriever,
+                # Retrieve context using the step-back question
+                "step_back_context": take_step_back | retriever,
+                # Pass on the question
+                "question": lambda x: x["query"],
+            }
+            | response_prompt
             | llm
             | StrOutputParser()
     )
 
-    # Question
-    result = rag_chain.invoke({"question": questions})
+    #result = chain.invoke({"question": questions})
+    result = chain.invoke({"query": questions["query"]})
 
     return result
 
 
 
-if __name__ == '__main__':
-    questions = {"query": "What are the main components of an LLM-powered autonomous agent system?"}
 
+
+if __name__ == '__main__':
+    # Step 1: Define the original question
+    original_query = {"query": "What is task decomposition for LLM agents?"}
     retriever_instance = create_retriever()
 
-    print(generator(questions, retriever_instance))
-
-
+    print(final_answer_generate(original_query,retriever_instance))
 

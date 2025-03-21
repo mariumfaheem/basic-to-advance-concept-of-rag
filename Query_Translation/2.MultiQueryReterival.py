@@ -44,18 +44,10 @@ import logging
 
 
 
-# argparse
-parser = argparse.ArgumentParser()
-parser.add_argument('-q', '--query', help='Query with RRF search')
-parser.add_argument('-r', '--retriever', help='Retrieve with RRF retriever')
-parser.add_argument('-v', '--vector', help='Query with vector search')
 
 load_dotenv()
 
 
-
-TOP_K = 5
-MAX_DOCS_FOR_CONTEXT = 8
 
 LANGSMITH_TRACING=os.environ['LANGSMITH_TRACING']
 LANGSMITH_ENDPOINT=os.environ['LANGSMITH_ENDPOINT']
@@ -64,15 +56,6 @@ LANGSMITH_PROJECT=os.environ['LANGSMITH_PROJECT']
 OPENAI_API_KEY=os.environ['OPENAI_API_KEY']
 URI=os.environ['URI']
 
-
-my_template_jp = """Use the provided information to answer the question accurately. 
-If the information does not contain a valid answer, say you don't know.
-
-Information: {context}
-
-Question: {question}
-
-Answer:"""
 
 
 
@@ -96,7 +79,6 @@ def load_and_split_document(DOCUMENT_URL):
     return splits
 
 
-
 def create_retriever(DOCUMENT_URL="https://lilianweng.github.io/posts/2023-06-23-agent/"):
     splits = load_and_split_document(DOCUMENT_URL)
     embeddings = OpenAIEmbeddings()
@@ -104,7 +86,7 @@ def create_retriever(DOCUMENT_URL="https://lilianweng.github.io/posts/2023-06-23
     vector_store = Milvus(
         embedding_function=embeddings,
         connection_args={"uri": URI,"db_name": "milvus_demo"},
-        collection_name="splits",
+        collection_name="decomposition",
         index_params={"index_type": "FLAT", "metric_type": "L2"},
     )
 
@@ -115,8 +97,6 @@ def create_retriever(DOCUMENT_URL="https://lilianweng.github.io/posts/2023-06-23
     retriever = vector_store.as_retriever()
 
     return retriever
-
-
 
 
 def query_generator(original_query):
@@ -135,15 +115,12 @@ def query_generator(original_query):
 
     output_parser = LineListOutputParser()
 
-    QUERY_PROMPT = PromptTemplate(
-        input_variables=["question"],
-        template="""You are an AI language model assistant. Your task is to generate five 
-        different versions of the given user question to retrieve relevant documents from a vector 
-        database. By generating multiple perspectives on the user question, your goal is to help
-        the user overcome some of the limitations of the distance-based similarity search. 
-        Provide these alternative questions separated by newlines.
-        Original question: {question}""",
-    )
+    QUERY_PROMPT = """You are an AI language model assistant. Your task is to generate five 
+    different versions of the given user question to retrieve relevant documents from a vector 
+    database. By generating multiple perspectives on the user question, your goal is to help
+    the user overcome some of the limitations of the distance-based similarity search. 
+    Provide these alternative questions separated by newlines. Original question: {question}"""
+
 
     llm = ChatOpenAI(temperature=0)
 
@@ -162,43 +139,7 @@ def query_generator(original_query):
 
 
 
-def reciprocal_rank_fusion(results: list[list], k=60):
-    """Rerank docs (Reciprocal Rank Fusion)
-
-    Args:
-        results (list[list]): retrieved documents
-        k (int, optional): parameter k for RRF. Defaults to 60.
-
-    Returns:
-        ranked_results: list of documents reranked by RRF
-    """
-
-    fused_scores = {}
-    for docs in results:
-        # Assumes the docs are returned in sorted order of relevance
-        for rank, doc in enumerate(docs):
-            doc_str = dumps(doc)
-            if doc_str not in fused_scores:
-                fused_scores[doc_str] = 0
-            fused_scores[doc_str] += 1 / (rank + k)
-
-    reranked_results = [
-        (loads(doc), score)
-        for doc, score in sorted(fused_scores.items(), key=lambda x: x[1], reverse=True)
-    ]
-
-    # for TEST (print reranked documentsand scores)
-    print("Reranked documents: ", len(reranked_results))
-    for doc in reranked_results:
-        print('---')
-        print('Docs: ', ' '.join(doc[0].page_content[:100].split()))
-        print('RRF score: ', doc[1])
-
-    # return only documents
-    return [x[0] for x in reranked_results[:MAX_DOCS_FOR_CONTEXT]]
-
-
-def rrf_retriever(query):
+def retriever(query):
     """RRF retriever
 
     Args:
@@ -216,89 +157,57 @@ def rrf_retriever(query):
         {"query": itemgetter("query")}
         | RunnableLambda(query_generator)
         | retriever.map()
-        | reciprocal_rank_fusion
     )
 
     # invoke
     result = chain.invoke({"query": query})
-    print("result of rrf_retriever",rrf_retriever)
+    print("result of doucment retrieve from vector DB",retriever)
 
     return result
 
-def query(query: str, retriever: BaseRetriever):
+
+def final_answer_generate(questions, retriever: BaseRetriever):
     """
     Retrieves relevant documents using `retriever` and generates an AI response.
     """
     # Define the prompt object
-    prompt = PromptTemplate(
-        template=my_template_jp,
-        input_variables=["context", "question"],
+
+    # Prompt
+    # RAG
+    template = """Answer the following question based on this context:
+
+    {context}
+
+    Question: {question}
+    """
+
+    prompt = ChatPromptTemplate.from_template(template)
+
+    llm = ChatOpenAI(temperature=0)
+
+    final_rag_chain = (
+            {"context": retrieval_chain,
+             "question": itemgetter("question")}
+            | prompt
+            | llm
+            | StrOutputParser()
     )
 
-    # Initialize OpenAI model
-    model = ChatOpenAI(temperature=0)
-
-    # Step 1: Retrieve relevant documents
-    retrieval_step = RunnableLambda(
-        lambda x: {
-            "context": retriever.invoke(x["question"]),
-            "question": x["question"]
-        }
-    )
-
-    # Step 2: Pass the retrieved documents to the AI model
-    generate_response = (
-        prompt  # Fill the prompt with context + question
-        | model  # Pass to the OpenAI model
-        | StrOutputParser()  # Extract the final response
-    )
-
-    # Step 3: Define the final chain
-    chain = retrieval_step | generate_response
-
-    # Execute the chain
-    result = chain.invoke({"question": query})
-
-    return result
+    final_rag_chain.invoke({"question": question})
 
 
-def main():
-
-    # OpenAI API KEY
-    if os.environ.get("OPENAI_API_KEY") == "":
-        print("`OPENAI_API_KEY` is not set", file=sys.stderr)
-        sys.exit(1)
-
-    # args
-    args = parser.parse_args()
-
-    # retriever
-    retriever = RunnableLambda(rrf_retriever)
-
-    # query
-    if args.query:
-        retriever = RunnableLambda(rrf_retriever)
-        result = query(args.query, retriever)
-    elif args.retriever:
-        retriever = RunnableLambda(rrf_retriever)
-        result = rrf_retriever(args.retriever)
-        sys.exit(0)
-    elif args.vector:
-        retriever = create_retriever(
-            search_type="similarity",
-            kwargs={"k": MAX_DOCS_FOR_CONTEXT}
-        )
-        result = query(args.vector, retriever)
-    else:
-        sys.exit(0)
-
-    # print answer
-    print('---\nAnswer:')
-    print(result)
 
 
 if __name__ == '__main__':
-    main()
+    # Step 1: Define the original question
+    original_query = {"query": "What are the main components of an LLM-powered autonomous agent system?"}
 
+    # Step 2: Generate sub-questions
+    questions = query_generator(original_query)  # Generates list of sub-queries
 
+    # Step 3: Create a retriever
+    retriever_instance = create_retriever()  # Initializes a vector database retriever
+
+    # Step 4: Generate final answers using decomposition RAG
+    print(final_answer_generate(questions, retriever_instance))
 

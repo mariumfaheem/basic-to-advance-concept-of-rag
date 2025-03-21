@@ -1,3 +1,22 @@
+### To install all libararies
+
+```sh
+python3 -m venv myenv
+```
+
+```sh
+source myenv/bin/activate
+```
+
+```sh
+pip install -r requirements.txt
+```
+
+```sh
+pip install --upgrade pip
+```
+
+
 ## Original Github
 https://github.com/langchain-ai/rag-from-scratch/blob/main/rag_from_scratch_5_to_9.ipynb
 
@@ -40,6 +59,17 @@ Retrieval-Augmented Generation (RAG) is a technique that enhances the capabiliti
 4. **Response Generation**: The top-ranked documents are combined and fed into a language model to generate a coherent and informative response to the user's original query.
 
 
+## Answer individually
+
+![img.png](images/img11.png)
+
+
+## 6.HyDE - Hypothetical Document Embeddings
+
+https://github.com/langchain-ai/langchain/blob/master/cookbook/hypothetical_document_embeddings.ipynb
+
+
+![img_1.png](images/img_12.png)
 
 
 # LangSmith
@@ -66,4 +96,35 @@ Iterate on prompts, with automatic version control and collaboration features.
 # End of End Retrival 
 
 ![img_2.png](images/img_2.png)
+
+
+
+# Routing
+
+![img.png](img.png)
+
+Logical routing means determiestics:
+Natural language routers can be completation , functionc call(anther llm)
+
+## Logical and Semantic routing
+
+![imgrouting1.png](images/imgrouting1.png)
+
+
+
+# Retrieval
+![img_1.png](img_1.png)
+
+
+# Corrective RAG (CRAG)
+
+
+
+### to push code into github
+
+git add . 
+git branch -M main
+git remote add origin git@github.com:mariumfaheem/basic-to-advance-concept-of-rag.git
+git push -u origin main
+
 
