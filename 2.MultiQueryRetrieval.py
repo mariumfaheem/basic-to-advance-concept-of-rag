@@ -1,4 +1,3 @@
-#Reference : https://github.com/kzhisa/rag-fusion/blob/main/rag_fusion.py
 
 import os
 from dotenv import load_dotenv
@@ -6,6 +5,8 @@ import bs4
 import argparse
 import os
 import sys
+from langchain.prompts import PromptTemplate
+from langchain.schema.runnable import RunnableMap
 from operator import itemgetter
 
 from dotenv import load_dotenv
@@ -35,11 +36,6 @@ from uuid import uuid4
 from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_openai import ChatOpenAI
 from typing import List
-from langchain_core.runnables import RunnableMap
-from langchain_core.prompts import PromptTemplate
-
-
-
 
 from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_core.output_parsers import BaseOutputParser
@@ -47,9 +43,10 @@ from langchain_core.prompts import PromptTemplate
 from pydantic import BaseModel, Field
 import logging
 
+from torch.cuda import temperature
 
-
-
+logging.basicConfig()
+logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.INFO)
 load_dotenv()
 
 
@@ -60,9 +57,6 @@ LANGSMITH_API_KEY=os.environ['LANGSMITH_API_KEY']
 LANGSMITH_PROJECT=os.environ['LANGSMITH_PROJECT']
 OPENAI_API_KEY=os.environ['OPENAI_API_KEY']
 URI=os.environ['URI']
-
-
-
 
 def load_and_split_document(DOCUMENT_URL):
     # # Load Documents
@@ -91,7 +85,7 @@ def create_retriever(DOCUMENT_URL="https://lilianweng.github.io/posts/2023-06-23
     vector_store = Milvus(
         embedding_function=embeddings,
         connection_args={"uri": URI,"db_name": "milvus_demo"},
-        collection_name="simple_rag",
+        collection_name="decomposition",
         index_params={"index_type": "FLAT", "metric_type": "L2"},
     )
 
@@ -101,85 +95,41 @@ def create_retriever(DOCUMENT_URL="https://lilianweng.github.io/posts/2023-06-23
     # retriever
     retriever = vector_store.as_retriever()
 
+    print("stored doucment into Vector DB Done",retriever)
+
     return retriever
 
 
-def retriever(query):
-    """RRF retriever
+def query_generator(original_query):
+    class LineListOutputParser(BaseOutputParser[List[str]]):
+        """Output parser for a list of lines."""
 
-    Args:
-        query (str): Query string
+        def parse(self, text: str) -> List[str]:
+            lines = text.strip().split("\n")
+            return list(filter(None, lines))  # Remove empty lines
 
-    Returns:
-        list[Document]: retrieved documents
-    """
+    output_parser = LineListOutputParser()
 
-    # Retriever
-    retriever = create_retriever() #Vector DB
+    QUERY_PROMPT = PromptTemplate("""
+    
+    You are an AI language model assistant. Your task is to generate five 
+    different versions of the given user question to retrieve relevant documents from a vector 
+    database. By generating multiple perspectives on the user question, your goal is to help
+    the user overcome some of the limitations of the distance-based similarity search. 
+    Provide these alternative questions separated by newlines. Original question: {query}
+    """)
 
-    # RRF chain
-    chain = (
-        {"query": itemgetter("query")}
-        | retriever.map()
-    )
+    llm = ChatOpenAI(temperature=0)
 
-    # invoke
-    result = chain.invoke({"query": query})
-    print("result of rrf_retriever",retriever)
+    llm_chain  = QUERY_PROMPT | llm | output_parser
 
-    return result
-
-def generator(question_text: str, retriever: BaseRetriever):
-    """
-    Retrieves relevant documents using `retriever` and generates an AI response.
-    """
-
-    prompt = PromptTemplate.from_template(
-        """Answer the question based only on the following context:
-        {context}
-
-        Question: {question}
-        """
-    )
-
-    llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0)
-
-    def format_docs(docs):
-        return "\n\n".join(doc.page_content for doc in docs)
-
-    # rag_chain = (
-    #     RunnableMap({
-    #         "context": retriever | format_docs,         # Now expects just a string
-    #         "question": RunnablePassthrough()
-    #     })
-    #     | prompt
-    #     | llm
-    #     | StrOutputParser()
-    # )
-
-    rag_chain = (
-            RunnableMap({
-                "context": itemgetter("question") | retriever | format_docs,
-                "question": itemgetter("question")
-            })
-            | prompt
-            | llm
-            | StrOutputParser()
-    )
-
-    result = rag_chain.invoke(question_text)  # Pass raw string
-
-    return result
+    queries = llm_chain.invoke(original_query)
+    print(queries)
+    return queries
 
 
 
 if __name__ == '__main__':
-
-    questions ={"question": "What are the main components of an LLM-powered autonomous agent system?"}
-    #questions = "Can you explain me in simply terms what is LLM and can it be autonomous agent?"
-    #questions = "Who is Nebojsa Dimic? Say that you dont know if you have no info about him"
-
-    retriever_instance = create_retriever()
-
-    print(generator(questions, retriever_instance))
+    original_query = {"query": "What are the main components of an LLM-powered autonomous agent system?"}
+    query_generator(original_query)
 

@@ -1,53 +1,22 @@
 #Reference : https://github.com/kzhisa/rag-fusion/blob/main/rag_fusion.py
 
-import os
-from dotenv import load_dotenv
 import bs4
-import argparse
 import os
-import sys
-from operator import itemgetter
 
 from dotenv import load_dotenv
-from langchain.load import dumps, loads
-from langchain_community.document_loaders import WebBaseLoader
-from langchain_community.document_loaders.wikipedia import WikipediaLoader
-from langchain_community.vectorstores import Chroma
-from langchain_core.documents.base import Document
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
-from langchain_core.retrievers import BaseRetriever
-from langchain_core.runnables import RunnableLambda, RunnablePassthrough
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain_text_splitters import TokenTextSplitter
-from langchain import hub
-from operator import itemgetter
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import WebBaseLoader
-from langchain_community.vectorstores import Chroma
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
-from langchain_milvus import BM25BuiltInFunction, Milvus
+from langchain_milvus import Milvus
 from uuid import uuid4
-from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_openai import ChatOpenAI
 from typing import List
-
-from langchain_core.runnables import RunnableLambda, RunnablePassthrough
 from langchain_core.output_parsers import BaseOutputParser
 from langchain_core.prompts import PromptTemplate
-from pydantic import BaseModel, Field
-import logging
-
-
-
 
 load_dotenv()
-
-
 
 LANGSMITH_TRACING=os.environ['LANGSMITH_TRACING']
 LANGSMITH_ENDPOINT=os.environ['LANGSMITH_ENDPOINT']
@@ -55,9 +24,6 @@ LANGSMITH_API_KEY=os.environ['LANGSMITH_API_KEY']
 LANGSMITH_PROJECT=os.environ['LANGSMITH_PROJECT']
 OPENAI_API_KEY=os.environ['OPENAI_API_KEY']
 URI=os.environ['URI']
-
-
-
 
 def load_and_split_document(DOCUMENT_URL):
     # # Load Documents
@@ -78,7 +44,6 @@ def load_and_split_document(DOCUMENT_URL):
 
     return splits
 
-
 def create_retriever(DOCUMENT_URL="https://lilianweng.github.io/posts/2023-06-23-agent/"):
     splits = load_and_split_document(DOCUMENT_URL)
     embeddings = OpenAIEmbeddings()
@@ -98,12 +63,9 @@ def create_retriever(DOCUMENT_URL="https://lilianweng.github.io/posts/2023-06-23
 
     return retriever
 
-
 def query_generator(original_query):
-    logging.basicConfig()
-    logging.getLogger("langchain.retrievers.multi_query").setLevel(logging.INFO)
-
     query = original_query.get("query")
+
     print("Original Query:", query)
 
     class LineListOutputParser(BaseOutputParser[List[str]]):
@@ -114,7 +76,6 @@ def query_generator(original_query):
             return list(filter(None, lines))  # Remove empty lines
 
     output_parser = LineListOutputParser()
-
 
     QUERY_PROMPT = PromptTemplate(
         input_variables=["question"],
@@ -131,141 +92,124 @@ def query_generator(original_query):
 
     queries = llm_chain.invoke({"question": query})
 
-    print("queries",queries)
-
     # Add original query
-    #queries.insert(0, "0. " + query)
-
+    queries.insert(0, "0. " + query)
 
     # Print for debugging
     print('Generated queries:\n', '\n'.join(queries))
 
     return queries
 
-
-
-def retrieve_and_rag(question,prompt_rag,sub_question_generator_chain,llm):
-    sub_questions = sub_question_generator_chain.invoke({"query": question})
-
-    rag_result = []
-
-    for sub_question in sub_questions:
-        retrieved_docs = retriever.get_relevant_documents(sub_question)
-
-        chain = prompt_rag | llm | StrOutputParser()
-
-        answer = chain.invoke({"context": retrieved_docs,
-                "question": sub_question})
-
-        rag_result.append(answer)
-    return rag_result,sub_questions
-
 def retriever(query):
-    """RRF retriever"""
-    retriever = create_retriever()  # Vector DB
-    generated_queries = query_generator(query)
+    """Retriever using external query generation.
 
+    Args:
+        query (str): Query string
 
-    retrieved_docs = [retriever.invoke(q) for q in generated_queries]
+    Returns:
+        list[Document]: retrieved documents
+    """
 
-    prompt_rag = """
-    Here is a question: 
-    {question}
+    # Step 1: Generate list of queries outside the chain
+    generated_queries = query_generator({"query": query})
 
-    and here is context:
+    # Step 2: Create the retriever
+    retriever = create_retriever()
 
+    # Step 3: Retrieve documents for each query
+    docs_per_query = []
+    for q in generated_queries:
+        document = retriever.get_relevant_documents(q)
+        docs_per_query.append(document)
+
+    #print("------------------------------------")
+    #print("result of retriever", docs_per_query)
+    return generated_queries, docs_per_query
+
+def final_answer_generate(original_query):
+
+    # retrieve documents after query decomposition
+    questions, retrieved_docs_per_query = retriever(original_query["query"])
+
+    # run retrieved documents through first LLM
+    rag_prompt_template = """
+    You are an expert assistant. Use the context below to answer the question as accurately and concisely as possible.
+
+    If the answer is not in the context, say "I don't know".
+
+    Question: {question}
+
+    Context:
     {context}
-
-    Please answer, and if you don't know, say you have no idea.
     """
-    decomposition_prompt = PromptTemplate(
-        template=prompt_rag,
+
+    prompt_rag = PromptTemplate(
         input_variables=["context", "question"],
+        template=rag_prompt_template,
     )
 
+    # Create LLM instance
     llm = ChatOpenAI(temperature=0)
 
-    # Chain
-    generate_queries_decomposition = ({"context": itemgetter("question") | retriever,
-                                          "question": itemgetter("question")},
-            decomposition_prompt | llm | StrOutputParser() | (lambda x: x.split("\n")))
+    # Prepare the RAG chain
+    rag_chain = prompt_rag | llm | StrOutputParser()
 
+    # Step 3: Run RAG for each sub-question
+    def answer_individual_subquestions(questions, retrieved_docs_per_query):
+        answers = []
 
-    # Run the retrieval and RAG pipeline
-    answers, questions = retrieve_and_rag(generated_queries, prompt_rag, generate_queries_decomposition, llm)
+        for q, docs in zip(questions, retrieved_docs_per_query):
+            # Combine all document texts into one context string
+            context = "\n".join(doc.page_content for doc in docs)
 
-    print("Result of questions and answers:", answers, questions)
+            # Invoke the chain
+            answer = rag_chain.invoke({"question": q, "context": context})
+            answers.append(answer)
 
-    return answers
+        return answers
 
+    individual_answers = answer_individual_subquestions(questions, retrieved_docs_per_query)
 
-def final_answer_generate(questions, retriever: BaseRetriever):
+    def format_qa_pairs(questions, answers):
+        return "\n\n".join(
+            f"Question: {q}\nAnswer: {a}" for q, a in zip(questions, answers)
+        )
+
+    qa_pairs_text = format_qa_pairs(questions, individual_answers)
+
+    # Final Synthesis prompt
+
+    final_prompt_template = """
+    Here is a set of Q&A pairs:
+
+    {qa_pairs}
+
+    Use them to answer the main question:
+
+    {main_question}
     """
-    Retrieves relevant documents using `retriever` and generates an AI response.
-    """
-    # Define the prompt object
 
-    # Prompt
-    template = """Here is the question you need to answer:
-
-    \n --- \n {question} \n --- \n
-
-    Here is any available background question + answer pairs:
-
-    \n --- \n {q_a_pairs} \n --- \n
-
-    Here is additional context relevant to the question:
-
-    \n --- \n {context} \n --- \n
-
-    Use the above context and any background question + answer pairs to answer the question: \n {question}
-    """
-
-    decomposition_prompt = PromptTemplate(
-        template=template,
-        input_variables=["context", "question"],
+    synthesis_prompt = PromptTemplate(
+        input_variables=["qa_pairs", "main_question"],
+        template=final_prompt_template
     )
 
-    def format_qa_pair(question, answer):
-        """Format Q and A pair"""
-        formatted_string = ""
-        formatted_string += f"Question: {question}\nAnswer: {answer}\n\n"
-        return formatted_string.strip()
+    # Run final LLM to generate final answer
 
-    # Initialize OpenAI model
-    llm = ChatOpenAI(temperature=0)
-    q_a_pairs = ""
-    for q in questions:
-        rag_chain = (
-                {"context": itemgetter("question") | retriever,
-                 "question": itemgetter("question"),
-                 "q_a_pairs": itemgetter("q_a_pairs")}
-                | decomposition_prompt
-                | llm
-                | StrOutputParser())
+    final_chain = synthesis_prompt | llm | StrOutputParser()
 
-        answer = rag_chain.invoke({"question": q, "q_a_pairs": q_a_pairs})
-        q_a_pair = format_qa_pair(q, answer)
-        q_a_pairs = q_a_pairs + "\n---\n" + q_a_pair
+    final_answer = final_chain.invoke({
+        "qa_pairs": qa_pairs_text,
+        "main_question": original_query["query"]
+    })
 
-    return answer
+    print('Returning Final Answer.....')
 
-
-
+    return final_answer
 
 if __name__ == '__main__':
     # Step 1: Define the original question
     original_query = {"query": "What are the main components of an LLM-powered autonomous agent system?"}
 
-    # Step 2: Generate sub-questions
-    questions = query_generator(original_query)  # Generates list of sub-queries
-
-    #print(retriever(original_query))
-
-
-    # Step 3: Create a retriever
-    retriever_instance = create_retriever()  # Initializes a vector database retriever
-
-    # Step 4: Generate final answers using decomposition RAG
-    print(final_answer_generate(questions, retriever_instance))
-
+    # Step 2: Invoke chain for "Answer Individually" RAG approach
+    print(final_answer_generate(original_query))
